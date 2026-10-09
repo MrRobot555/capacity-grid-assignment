@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
@@ -92,6 +93,11 @@ func (s *server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "to must be a date in YYYY-MM-DD format")
 		return
 	}
+	// Year 0 parses, but its Monday is in year -1, which isn't YYYY-MM-DD.
+	if from.Year() < 1 {
+		writeError(w, http.StatusBadRequest, "dates must be in years 0001 to 9999")
+		return
+	}
 	if to.Before(from) {
 		writeError(w, http.StatusBadRequest, "to must not be before from")
 		return
@@ -105,6 +111,7 @@ func (s *server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 
 	people, err := loadCapacity(r.Context(), s.db, weeks)
 	if err != nil {
+		log.Printf("load capacity %s..%s: %v", weeks[0].Format(dateLayout), weeks[len(weeks)-1].Format(dateLayout), err)
 		writeError(w, http.StatusInternalServerError, "could not load capacity")
 		return
 	}

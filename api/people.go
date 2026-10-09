@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -13,6 +16,11 @@ import (
 // maxWeeklyHours is every hour of a week. Anything above it is a typo, not a
 // contract.
 const maxWeeklyHours = 168
+
+// updateTimeout bounds how long a save waits on the database, e.g. behind a row
+// lock held elsewhere. The client waits longer (SAVE_TIMEOUT_MS in web/src/api.ts),
+// so when the server gives up first the manager gets a definite "not saved".
+var updateTimeout = 10 * time.Second
 
 type person struct {
 	ID          int     `json:"id"`
@@ -56,8 +64,11 @@ func (s *server) handleUpdatePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), updateTimeout)
+	defer cancel()
+
 	var p person
-	err = s.db.QueryRow(r.Context(), `
+	err = s.db.QueryRow(ctx, `
 		UPDATE people SET weekly_hours = $2
 		WHERE id = $1
 		RETURNING id, name, weekly_hours::float8`, id, hours).
@@ -66,7 +77,13 @@ func (s *server) handleUpdatePerson(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "person not found")
 		return
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		log.Printf("update person %d: gave up after %v: %v", id, updateTimeout, err)
+		writeError(w, http.StatusServiceUnavailable, "the database didn't respond in time")
+		return
+	}
 	if err != nil {
+		log.Printf("update person %d: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "could not update person")
 		return
 	}

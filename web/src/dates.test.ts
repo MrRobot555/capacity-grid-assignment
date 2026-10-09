@@ -110,7 +110,9 @@ describe('dates a person can type', () => {
   })
 
   it('caps a range at the longest the API serves', () => {
-    expect(weekCount('2026-01-05', limitWeeks({ from: '2026-01-05', to: '2030-01-06' }).to)).toBe(MAX_WEEKS)
+    // 106 is maxWeeks in api/capacity.go; a literal, so the two can't drift apart unnoticed.
+    expect(MAX_WEEKS).toBe(106)
+    expect(weekCount('2026-01-05', limitWeeks({ from: '2026-01-05', to: '2030-01-06' }).to)).toBe(106)
     expect(limitWeeks({ from: '2026-01-05', to: '2026-01-18' })).toEqual({ from: '2026-01-05', to: '2026-01-18' })
   })
 })

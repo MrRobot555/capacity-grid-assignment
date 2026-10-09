@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -89,15 +90,23 @@ func TestCapacityFixturePeople(t *testing.T) {
 
 func TestCapacityRangeSnapsToWholeWeeks(t *testing.T) {
 	s := testServer(t)
-	// Wednesday → Sunday: the Wednesday's week through the Sunday's week.
-	rec := do(t, s, "GET", "/api/capacity?from=2025-12-31&to=2026-01-11", "")
-	var resp capacityResponse
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"2025-12-29", "2026-01-05"}
-	if !reflect.DeepEqual(resp.Weeks, want) {
-		t.Errorf("weeks = %v, want %v", resp.Weeks, want)
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		// Wednesday → Sunday: the Wednesday's week through the Sunday's week.
+		{"from=2025-12-31&to=2026-01-11", []string{"2025-12-29", "2026-01-05"}},
+		// A Sunday belongs to the week that started the Monday before, not the next one.
+		{"from=2026-01-04&to=2026-01-04", []string{"2025-12-29"}},
+	} {
+		rec := do(t, s, "GET", "/api/capacity?"+tc.query, "")
+		var resp capacityResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(resp.Weeks, tc.want) {
+			t.Errorf("%s: weeks = %v, want %v", tc.query, resp.Weeks, tc.want)
+		}
 	}
 }
 
@@ -112,6 +121,7 @@ func TestCapacityRejectsBadRanges(t *testing.T) {
 		"from=2026-02-30&to=2026-03-01", // no such day
 		"from=%202026-01-05&to=2026-01-11",
 		"from=2026-01-05&to=2028-01-17", // 107 weeks
+		"from=0000-01-03&to=0000-01-09", // year 0: weeks would format as "-0001-12-27"
 	} {
 		if rec := do(t, s, "GET", "/api/capacity?"+q, ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: status %d, want 400", q, rec.Code)
@@ -153,6 +163,14 @@ func TestUpdatePerson(t *testing.T) {
 	if p != (person{ID: 3, Name: "Cem Aydin", WeeklyHours: 32.5}) {
 		t.Errorf("got %+v", p)
 	}
+	// The response must be what was stored, not an echo of the request.
+	var stored float64
+	if err := s.db.QueryRow(context.Background(), `SELECT weekly_hours::float8 FROM people WHERE id = 3`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 32.5 {
+		t.Errorf("stored weekly_hours = %v, want 32.5", stored)
+	}
 
 	for _, tc := range []struct {
 		url, body string
@@ -175,5 +193,44 @@ func TestUpdatePerson(t *testing.T) {
 		if rec := do(t, s, "PATCH", tc.url, tc.body); rec.Code != tc.status {
 			t.Errorf("%s %s: status %d, want %d", tc.url, tc.body, rec.Code, tc.status)
 		}
+	}
+}
+
+// A save stuck behind a lock (another transaction holding the row) must end
+// with a definite answer rather than hang; the client's own timeout is longer,
+// so the server's "not saved" is what the manager sees.
+func TestUpdatePersonGivesUpOnALockedRow(t *testing.T) {
+	s := testServer(t)
+	ctx := context.Background()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM people WHERE id = 3 FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	saved := updateTimeout
+	updateTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { updateTimeout = saved })
+
+	start := time.Now()
+	rec := do(t, s, "PATCH", "/api/people/3", `{"weeklyHours": 21}`)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("took %v; it should give up after the timeout", elapsed)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status %d, want 503: %s", rec.Code, rec.Body)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var stored float64
+	if err := s.db.QueryRow(ctx, `SELECT weekly_hours::float8 FROM people WHERE id = 3`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 20 {
+		t.Errorf("stored weekly_hours = %v, want the seeded 20", stored)
 	}
 }

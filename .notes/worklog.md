@@ -80,3 +80,14 @@ left unfinished. Append as you go; a line or two per entry is right.
 - A parallel agent wrote it while I hardened the app. I reviewed it before committing.
 - Found a bug jsdom can't: `max={168}` triggered Chrome's native validation, which blocked the submit, so typing 169 showed a browser popup instead of the app's message. Fixed with `noValidate`.
 - The agent caught its own wrong assumption: it expected one GET on load, but React StrictMode double-mounts in dev, which gives two (the first aborted). The test now asserts that a save adds no GET instead.
+
+## Review round 1 (register: `.notes/review-register.md`)
+
+- Two reviewers in parallel with the tree frozen: one adversarial with reproductions, one auditing gates by mutation (63 mutations, 30 survived at least one suite). 21 findings, all fixed in one commit.
+- Corrects my earlier entry on save errors: deciding "Not saved" by status code (502–504 meaning unknown) was the wrong signal. It now depends on who answered. Our API always answers with its JSON `{error}`, which means a definite "Not saved". No answer, a timeout, or a proxy's HTML page means "couldn't confirm". That also lets the API's own timeout use 503 honestly.
+- New behaviour worth knowing:
+  - saves time out (client 15 s, API 10 s, so the server's answer arrives first);
+  - after a "couldn't confirm" save, the old value is always sent again, and Cancel reloads the range;
+  - a failed save whose row is scrolled away or filtered out shows a banner with "Show";
+  - date fields keep what you type and apply it after a pause, on Enter or when focus leaves.
+- Not done: round 2, and one flaky browser test (R1-X1).

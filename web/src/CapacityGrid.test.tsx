@@ -26,7 +26,9 @@ afterEach(() => {
 it('keeps the grid honest through a failed save and a successful retry', async () => {
   const patchResponses = [
     json(500, { error: 'could not update person' }),
-    json(200, { id: 4, name: 'Dee Okafor', weeklyHours: 50 }),
+    // The server stores 48 for a typed 50 (say it rounds): the grid must show
+    // what the server holds, not what was typed.
+    json(200, { id: 4, name: 'Dee Okafor', weeklyHours: 48 }),
   ]
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
     init?.method === 'PATCH' ? patchResponses.shift()! : json(200, capacity),
@@ -54,7 +56,7 @@ it('keeps the grid honest through a failed save and a successful retry', async (
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
   // Confirmed: the capacity, the cell and the column count all follow.
-  await waitFor(() => expect(within(dee).getByRole('button', { name: /Weekly hours/ })).toHaveTextContent('50h'))
+  await waitFor(() => expect(within(dee).getByRole('button', { name: /Weekly hours/ })).toHaveTextContent('48h'))
   expect(within(dee).queryByText('+5')).not.toBeInTheDocument()
   expect(firstWeekHeader).toHaveTextContent('none over')
   expect(screen.getByText(/people over capacity/)).toHaveTextContent('0 of 2 people over capacity')

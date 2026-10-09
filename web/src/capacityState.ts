@@ -13,14 +13,14 @@ import type { ISODate } from './dates'
 
 export type Status = 'over' | 'full' | 'under' | 'none'
 
-// Allocations are sums of eighths of an hour, so they are exact in floating
-// point, but a manager can type any capacity. Compare with a little slack.
-const EPSILON = 1e-9
-
+// Classify on the same two decimals the grid displays, so a cell never shows
+// "40" against "40h" in red (capacity 39.999) or "+0" over.
 export function allocationStatus(allocated: number, capacity: number): Status {
-  if (allocated - capacity > EPSILON) return 'over'
-  if (allocated < EPSILON) return 'none'
-  if (Math.abs(allocated - capacity) <= EPSILON) return 'full'
+  const a = Math.round(allocated * 100)
+  const c = Math.round(capacity * 100)
+  if (a > c) return 'over'
+  if (a === 0) return 'none'
+  if (a === c) return 'full'
   return 'under'
 }
 
