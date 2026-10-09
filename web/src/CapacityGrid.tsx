@@ -26,7 +26,14 @@ type Props = {
 const WEEK_OPTIONS = [4, 8, 13, 26, 52]
 const SLOW_AFTER_MS = 1500
 
-type Editing = { id: number; draft: string; saving: boolean; error: string | null }
+type Editing = {
+  id: number
+  draft: string
+  saving: boolean
+  error: string | null
+  /** The last attempt reached the server and failed, so the action is a retry. */
+  failed: boolean
+}
 
 // CapacityGrid renders one row per person and one column per week, showing
 // how allocated each person is and making over-allocation obvious.
@@ -67,7 +74,7 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
     const { id } = editing
     const hours = parseWeeklyHours(editing.draft)
     if (typeof hours === 'string') {
-      setEditing({ ...editing, error: hours })
+      setEditing({ ...editing, error: hours, failed: false })
       return
     }
     if (hours === people[id]?.weeklyHours) {
@@ -79,8 +86,8 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
       await saveWeeklyHours(id, hours)
       setEditing((cur) => (cur?.id === id ? null : cur))
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      setEditing((cur) => (cur?.id === id ? { ...cur, saving: false, error } : cur))
+      const error = `Not saved. ${err instanceof Error ? err.message : String(err)}`
+      setEditing((cur) => (cur?.id === id ? { ...cur, saving: false, error, failed: true } : cur))
     }
   }
 
@@ -195,25 +202,27 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                     {row.name}
                   </th>
                   <td className="cap">
-                    {editing?.id === row.id ? (
+                    {/* Always the confirmed value; the draft lives in the editor below the row. */}
+                    <button
+                      type="button"
+                      className="cap-button"
+                      aria-label={`Weekly hours for ${row.name}: ${hours(row.weeklyHours)}. Edit`}
+                      aria-expanded={editing?.id === row.id}
+                      disabled={editing?.id === row.id}
+                      onClick={() =>
+                        setEditing({ id: row.id, draft: String(row.weeklyHours), saving: false, error: null, failed: false })
+                      }
+                    >
+                      {hours(row.weeklyHours)}
+                    </button>
+                    {editing?.id === row.id && (
                       <CapacityEditor
                         name={row.name}
                         editing={editing}
-                        onChange={(draft) => setEditing({ ...editing, draft, error: null })}
+                        onChange={(draft) => setEditing({ ...editing, draft, error: null, failed: false })}
                         onSubmit={submit}
                         onCancel={() => setEditing(null)}
                       />
-                    ) : (
-                      <button
-                        type="button"
-                        className="cap-button"
-                        aria-label={`Weekly hours for ${row.name}: ${hours(row.weeklyHours)}. Edit`}
-                        onClick={() =>
-                          setEditing({ id: row.id, draft: String(row.weeklyHours), saving: false, error: null })
-                        }
-                      >
-                        {hours(row.weeklyHours)}
-                      </button>
                     )}
                   </td>
                   {row.allocated.map((allocated, i) => (
@@ -292,7 +301,7 @@ function CapacityEditor(props: {
         }}
       />
       <button type="submit" disabled={editing.saving}>
-        {editing.saving ? 'Saving…' : editing.error ? 'Retry' : 'Save'}
+        {editing.saving ? 'Saving…' : editing.failed ? 'Retry' : 'Save'}
       </button>
       <button type="button" onClick={onCancel} disabled={editing.saving}>
         Cancel

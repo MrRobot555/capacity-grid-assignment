@@ -3,6 +3,8 @@ import { addDays, formatShort, mondayOf, shiftWeeks, todayISO, weekCount, weekRa
 
 // Date bugs hide in the viewer's time zone, so run the sensitive cases in zones
 // on both sides of UTC. Node picks up a change to process.env.TZ immediately.
+// (Declared here rather than pulling Node's types into the browser app.)
+declare const process: { env: { TZ?: string } }
 const originalTZ = process.env.TZ
 afterEach(() => {
   process.env.TZ = originalTZ

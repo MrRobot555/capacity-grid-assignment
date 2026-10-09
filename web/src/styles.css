@@ -185,6 +185,13 @@ thead .cap {
   font-variant-numeric: tabular-nums;
 }
 
+.cap-button:disabled {
+  border-style: solid;
+  border-color: #2563eb;
+  color: inherit;
+  cursor: default;
+}
+
 .cap-button:hover,
 .cap-button:focus-visible {
   border-style: solid;
@@ -195,9 +202,10 @@ td.cap:has(.cap-editor) {
   z-index: 4;
 }
 
+/* Opens below the row so the row's own numbers stay visible while editing. */
 .cap-editor {
   position: absolute;
-  top: 0.15rem;
+  top: calc(100% - 0.2rem);
   left: 0.3rem;
   display: grid;
   grid-template-columns: 5rem auto auto;
