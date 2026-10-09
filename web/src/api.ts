@@ -17,8 +17,18 @@ export type CapacityResponse = {
 
 export type Person = { id: number; name: string; weeklyHours: number }
 
-/** A failure with a message that can be shown to a manager as-is. */
-export class ApiError extends Error {}
+/**
+ * A failure with a message that can be shown to a manager as-is. `status` is
+ * set when the server answered; without it we don't know what the server did.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message)
+  }
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let res: Response
@@ -35,6 +45,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const message = (body as { error?: unknown } | null)?.error
     throw new ApiError(
       typeof message === 'string' ? message : `The server couldn't handle the request (${res.status}).`,
+      res.status,
     )
   }
   if (body === null) throw new ApiError('The server sent a response we could not read.')

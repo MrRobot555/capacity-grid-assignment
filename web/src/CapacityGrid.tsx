@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from 'react'
+import { ApiError } from './api'
 import { allocationStatus, parseWeeklyHours, rangeKey, type Status } from './capacityState'
 import {
   formatLong,
@@ -101,7 +102,7 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
       await saveWeeklyHours(id, hours)
       setEditing((cur) => (cur?.id === id ? null : cur))
     } catch (err) {
-      const error = `Not saved. ${err instanceof Error ? err.message : String(err)}`
+      const error = saveErrorMessage(err)
       setEditing((cur) => (cur?.id === id ? { ...cur, saving: false, error, failed: true } : cur))
     }
   }
@@ -421,6 +422,18 @@ function useSlow(key: string | null) {
     return () => clearTimeout(timer)
   }, [key])
   return key !== null && slowKey === key
+}
+
+function saveErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  // Our API answered with an error: it did not store the value. (502–504 come
+  // from a proxy in front of it, which may have given up after the API stored it.)
+  const status = err instanceof ApiError ? err.status : undefined
+  if (status !== undefined && status >= 400 && ![502, 503, 504].includes(status)) return `Not saved. ${message}`
+  // No answer, or one we couldn't read: the server may have stored it before
+  // the connection dropped. The grid keeps showing the last confirmed value,
+  // and a retry is safe because a save sets an absolute value.
+  return `Couldn't confirm the save, so it may or may not have been stored. Retrying is safe. (${message})`
 }
 
 // Lower-case, without accents, so "soren ob" finds "Søren Öberg". Some letters

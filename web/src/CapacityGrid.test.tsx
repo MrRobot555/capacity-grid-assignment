@@ -127,3 +127,26 @@ it('finds people by name, ignoring case and accents', async () => {
   expect(screen.getByText('Dee Okafor')).toBeInTheDocument()
   expect(screen.queryByText('Søren Öberg')).not.toBeInTheDocument()
 })
+
+// A save whose response never arrives may still have been stored: saying "Not
+// saved" would be a guess. Saying so plainly, and offering a safe retry, isn't.
+it('does not claim a save failed when the answer was lost', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') throw new TypeError('Failed to fetch')
+      return json(200, capacity)
+    }),
+  )
+  render(<CapacityGrid from="2026-01-05" to="2026-01-18" onRangeChange={() => {}} />)
+  const dee = (await screen.findByText('Dee Okafor')).closest('tr')!
+  fireEvent.click(within(dee).getByRole('button', { name: /Weekly hours for Dee Okafor/ }))
+  fireEvent.change(screen.getByLabelText('Weekly hours for Dee Okafor'), { target: { value: '50' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent("Couldn't confirm the save")
+  expect(alert).not.toHaveTextContent('Not saved')
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+  expect(within(dee).getByText('+5')).toBeInTheDocument()
+})
