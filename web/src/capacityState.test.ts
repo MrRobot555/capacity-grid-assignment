@@ -36,20 +36,32 @@ describe('allocationStatus', () => {
 describe('capacityReducer', () => {
   it('drops a response for a range that is no longer requested', () => {
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
-      { type: 'fetchStarted', key: 'B' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
+      { type: 'fetchStarted', key: 'B', issuedAt: 2 },
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(40) },
     )
     expect(state.data).toBeNull()
     expect(state.loading).toBe(true)
   })
 
+  it('drops an older request for the same range: A → B → back to A', () => {
+    // Abort normally stops the first A request, but the reducer must not depend on it.
+    const state = run(
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
+      { type: 'fetchStarted', key: 'B', issuedAt: 2 },
+      { type: 'fetchStarted', key: 'A', issuedAt: 3 },
+      { type: 'fetchSucceeded', key: 'A', issuedAt: 3, response: response(40) },
+      { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(10) },
+    )
+    expect(state.people[4].weeklyHours).toBe(40)
+  })
+
   it('keeps the previous range on screen when a load fails', () => {
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(40) },
-      { type: 'fetchStarted', key: 'B' },
-      { type: 'fetchFailed', key: 'B', error: 'boom' },
+      { type: 'fetchStarted', key: 'B', issuedAt: 2 },
+      { type: 'fetchFailed', key: 'B', issuedAt: 2, error: 'boom' },
     )
     expect(state.data?.key).toBe('A')
     expect(state.error).toBe('boom')
@@ -58,7 +70,7 @@ describe('capacityReducer', () => {
 
   it('orders people by name for humans, not by byte', () => {
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
       {
         type: 'fetchSucceeded',
         key: 'A',
@@ -77,7 +89,7 @@ describe('capacityReducer', () => {
 
   it('applies a confirmed save to the person, leaving allocations alone', () => {
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(40) },
       { type: 'saveConfirmed', person: { id: 4, name: 'Dee Okafor', weeklyHours: 50 }, confirmedAt: 2 },
     )
@@ -89,9 +101,9 @@ describe('capacityReducer', () => {
     // Navigate (load issued at 2), save confirms at 3, then the load arrives
     // carrying the old value.
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(40) },
-      { type: 'fetchStarted', key: 'B' },
+      { type: 'fetchStarted', key: 'B', issuedAt: 2 },
       { type: 'saveConfirmed', person: { id: 4, name: 'Dee Okafor', weeklyHours: 50 }, confirmedAt: 3 },
       { type: 'fetchSucceeded', key: 'B', issuedAt: 2, response: response(40) },
     )
@@ -101,10 +113,10 @@ describe('capacityReducer', () => {
 
   it('takes the server value from a load sent after the save', () => {
     const state = run(
-      { type: 'fetchStarted', key: 'A' },
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(40) },
       { type: 'saveConfirmed', person: { id: 4, name: 'Dee Okafor', weeklyHours: 50 }, confirmedAt: 2 },
-      { type: 'fetchStarted', key: 'B' },
+      { type: 'fetchStarted', key: 'B', issuedAt: 3 },
       // Someone else changed it again since: the newer load wins.
       { type: 'fetchSucceeded', key: 'B', issuedAt: 3, response: response(36) },
     )

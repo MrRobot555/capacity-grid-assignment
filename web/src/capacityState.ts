@@ -31,8 +31,10 @@ export type Loaded = {
 }
 
 export type State = {
-  /** The range the grid is asking for. Responses for any other range are dropped. */
+  /** The range the grid is asking for. */
   requestedKey: string | null
+  /** The request it is waiting for. Responses to any other request are dropped. */
+  requestedAt: number | null
   loading: boolean
   error: string | null
   /** The last range that loaded. Kept on screen while the next one loads or fails. */
@@ -43,13 +45,14 @@ export type State = {
 }
 
 export type Action =
-  | { type: 'fetchStarted'; key: string }
+  | { type: 'fetchStarted'; key: string; issuedAt: number }
   | { type: 'fetchSucceeded'; key: string; issuedAt: number; response: CapacityResponse }
-  | { type: 'fetchFailed'; key: string; error: string }
+  | { type: 'fetchFailed'; key: string; issuedAt: number; error: string }
   | { type: 'saveConfirmed'; person: Person; confirmedAt: number }
 
 export const initialState: State = {
   requestedKey: null,
+  requestedAt: null,
   loading: false,
   error: null,
   data: null,
@@ -68,10 +71,12 @@ export function rangeKey(from: ISODate, to: ISODate): string {
 export function capacityReducer(state: State, action: Action): State {
   switch (action.type) {
     case 'fetchStarted':
-      return { ...state, requestedKey: action.key, loading: true, error: null }
+      return { ...state, requestedKey: action.key, requestedAt: action.issuedAt, loading: true, error: null }
 
     case 'fetchSucceeded': {
-      if (action.key !== state.requestedKey) return state
+      // Matching the request, not just the range: after A → B → A, the first
+      // request for A is as stale as the one for B.
+      if (action.issuedAt !== state.requestedAt) return state
       const people = { ...state.people }
       for (const p of action.response.people) {
         // A load that was sent before a save was confirmed can carry the old
@@ -96,7 +101,7 @@ export function capacityReducer(state: State, action: Action): State {
     }
 
     case 'fetchFailed':
-      if (action.key !== state.requestedKey) return state
+      if (action.issuedAt !== state.requestedAt) return state
       return { ...state, loading: false, error: action.error }
 
     case 'saveConfirmed': {

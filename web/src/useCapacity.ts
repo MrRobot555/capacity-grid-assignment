@@ -13,12 +13,12 @@ export function useCapacity(from: ISODate, to: ISODate) {
     const key = rangeKey(from, to)
     const controller = new AbortController()
     const issuedAt = ++clock.current
-    dispatch({ type: 'fetchStarted', key })
+    dispatch({ type: 'fetchStarted', key, issuedAt })
     fetchCapacity(from, to, controller.signal).then(
       (response) => dispatch({ type: 'fetchSucceeded', key, issuedAt, response }),
       (err: unknown) => {
         if (controller.signal.aborted) return
-        dispatch({ type: 'fetchFailed', key, error: err instanceof Error ? err.message : String(err) })
+        dispatch({ type: 'fetchFailed', key, issuedAt, error: err instanceof Error ? err.message : String(err) })
       },
     )
     // A newer range supersedes this one: stop waiting for it.
