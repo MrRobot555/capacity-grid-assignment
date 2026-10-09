@@ -41,13 +41,16 @@ func main() {
 
 	s := &server{db: db}
 
+	log.Println("listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", s.routes()))
+}
+
+func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/capacity", s.handleCapacity)
 	mux.HandleFunc("PATCH /api/people/{id}", s.handleUpdatePerson)
-
-	log.Println("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	return mux
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +60,12 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "people": people})
+}
+
+// writeError sends {"error": msg} so the client can always parse failures the
+// same way it parses successes.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
