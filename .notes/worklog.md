@@ -67,3 +67,16 @@ left unfinished. Append as you go; a line or two per entry is right.
 - Moving From past To now keeps the number of weeks instead of collapsing to one.
 - Found by reading: the reducer dropped stale responses by range key only, so after A → B → back to A the first A request still counted as current. It was safe only because the hook aborts superseded fetches. The reducer now matches the request (`issuedAt`), not the range. Checked: the new test fails against the key-only check.
 - Found by thinking about how saves fail: a save whose response is lost (connection drop, proxy timeout) said "Not saved", but the DB may already hold it. Now only an error from the API itself (4xx, 500) says "Not saved". No answer, or a 502–504 from the proxy, says the save couldn't be confirmed and that retrying is safe: PATCH sets an absolute value, so it's idempotent. The grid keeps showing the last confirmed value either way.
+
+## Browser suite (`e2e/`)
+
+- 17 Playwright tests in real Chromium, with faults injected through `page.route`:
+  - out-of-order responses, slow loads, 502 HTML, aborted connections, truncated JSON;
+  - failed and lost saves; a late GET racing a save; the editor lock;
+  - fixture numbers in UTC−8/+14 and across DST;
+  - virtualised rows checked by geometry;
+  - one real save round trip, restored afterwards.
+- Run with `make up`, then `cd e2e && npm install && npx playwright test`. It runs on the host, not in Compose: Playwright's browsers don't run on the Alpine Node image, and the run environment is fixed.
+- A parallel agent wrote it while I hardened the app. I reviewed it before committing.
+- Found a bug jsdom can't: `max={168}` triggered Chrome's native validation, which blocked the submit, so typing 169 showed a browser popup instead of the app's message. Fixed with `noValidate`.
+- The agent caught its own wrong assumption: it expected one GET on load, but React StrictMode double-mounts in dev, which gives two (the first aborted). The test now asserts that a save adds no GET instead.
