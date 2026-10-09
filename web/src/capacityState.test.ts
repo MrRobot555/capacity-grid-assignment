@@ -27,6 +27,12 @@ describe('allocationStatus', () => {
     expect(allocationStatus(0, 40)).toBe('none')
   })
 
+  it('classifies on the two decimals the grid shows, so "40 of 40h" is never red', () => {
+    expect(allocationStatus(40, 39.999)).toBe('full')
+    expect(allocationStatus(40.004, 40)).toBe('full')
+    expect(allocationStatus(40.01, 40)).toBe('over')
+  })
+
   it('treats any allocation against zero capacity as over, without dividing', () => {
     expect(allocationStatus(20, 0)).toBe('over')
     expect(allocationStatus(0, 0)).toBe('none')
@@ -54,6 +60,16 @@ describe('capacityReducer', () => {
       { type: 'fetchSucceeded', key: 'A', issuedAt: 1, response: response(10) },
     )
     expect(state.people[4].weeklyHours).toBe(40)
+  })
+
+  it('drops a failure for a range that is no longer requested', () => {
+    const state = run(
+      { type: 'fetchStarted', key: 'A', issuedAt: 1 },
+      { type: 'fetchStarted', key: 'B', issuedAt: 2 },
+      { type: 'fetchFailed', key: 'A', issuedAt: 1, error: 'boom' },
+    )
+    expect(state.error).toBeNull()
+    expect(state.loading).toBe(true)
   })
 
   it('keeps the previous range on screen when a load fails', () => {

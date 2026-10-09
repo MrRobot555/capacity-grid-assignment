@@ -29,6 +29,7 @@ type Props = {
 
 const WEEK_OPTIONS = [4, 8, 13, 26, 52]
 const SLOW_AFTER_MS = 1500
+const COMMIT_DATE_AFTER_MS = 600
 // Rows are virtualised: only the ones in view (plus OVERSCAN either side) are
 // rendered, so a roster of thousands over two years stays responsive. That
 // needs every row to be the same height. styles.css fixes it at 44px, but zoom
@@ -42,9 +43,16 @@ type Editing = {
   draft: string
   saving: boolean
   error: string | null
-  /** The last attempt reached the server and failed, so the action is a retry. */
+  /** The last attempt failed, so the action is a retry. */
   failed: boolean
+  /** The last attempt got no definite answer: the server may hold the value. */
+  unconfirmed: boolean
+  /** Move focus into the editor when it next mounts. Only set when it opens, so
+   * a row that remounts (scrolling back, a search) doesn't steal focus. */
+  focus: boolean
 }
+
+const closedEditor = { saving: false, error: null, failed: false, unconfirmed: false }
 
 // CapacityGrid renders one row per person and one column per week, showing
 // how allocated each person is and making over-allocation obvious.
@@ -57,7 +65,10 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
   const [onlyOver, setOnlyOver] = useState(false)
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Editing | null>(null)
-  const slow = useSlow(state.loading ? state.requestedKey : null)
+  const slow = useSlow(state.loading ? state.requestedAt : null)
+  // After an editor closes, focus goes back to that person's capacity button.
+  const returnFocusTo = useRef<number | null>(null)
+  const [scrollToId, setScrollToId] = useState<number | null>(null)
   const { scrollerRef, first, last, rowHeight, onScroll } = useRowWindow()
 
   const range = { from, to }
@@ -84,6 +95,38 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
   const windowEnd = Math.min(visible.length, last)
   const windowStart = Math.min(first, windowEnd)
   const showingOtherRange = data !== null && data.key !== rangeKey(from, to)
+  const editingName = editing ? people[editing.id]?.name : undefined
+  const editingRendered =
+    editing !== null && visible.slice(windowStart, windowEnd).some((row) => row.id === editing.id)
+
+  useEffect(() => {
+    const id = returnFocusTo.current
+    if (id === null || editing !== null) return
+    returnFocusTo.current = null
+    scrollerRef.current?.querySelector<HTMLElement>(`button[data-person-id="${id}"]`)?.focus({ preventScroll: true })
+  })
+
+  // "Show" on the off-screen save error: once the filters are cleared, scroll to the row.
+  useEffect(() => {
+    if (scrollToId === null) return
+    const index = visible.findIndex((row) => row.id === scrollToId)
+    const el = scrollerRef.current
+    if (index >= 0 && el) el.scrollTop = Math.max(0, index * rowHeight - el.clientHeight / 3)
+    setScrollToId(null)
+  }, [scrollToId, visible, rowHeight, scrollerRef])
+
+  function openEditor(id: number, weeklyHours: number) {
+    setEditing({ id, draft: String(weeklyHours), ...closedEditor, focus: true })
+  }
+
+  function closeEditor() {
+    if (!editing || editing.saving) return
+    returnFocusTo.current = editing.id
+    // After a save with no definite answer the grid may be showing a value the
+    // server no longer holds. Reload, so it shows what the server has.
+    if (editing.unconfirmed) retry()
+    setEditing(null)
+  }
 
   async function submit() {
     if (!editing || editing.saving) return
@@ -93,17 +136,22 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
       setEditing({ ...editing, error: hours, failed: false })
       return
     }
-    if (hours === people[id]?.weeklyHours) {
-      setEditing(null)
+    // Nothing to save, unless the last attempt's outcome is unknown: then the
+    // server may hold something else, and only sending the value makes it so.
+    if (hours === people[id]?.weeklyHours && !editing.unconfirmed) {
+      closeEditor()
       return
     }
     setEditing({ ...editing, saving: true, error: null })
     try {
       await saveWeeklyHours(id, hours)
+      returnFocusTo.current = id
       setEditing((cur) => (cur?.id === id ? null : cur))
     } catch (err) {
-      const error = saveErrorMessage(err)
-      setEditing((cur) => (cur?.id === id ? { ...cur, saving: false, error, failed: true } : cur))
+      const { message, unconfirmed } = describeSaveError(err)
+      setEditing((cur) =>
+        cur?.id === id ? { ...cur, saving: false, error: message, failed: true, unconfirmed } : cur,
+      )
     }
   }
 
@@ -121,36 +169,21 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
             ›
           </button>
         </div>
-        <label>
-          From
-          <input
-            type="date"
-            value={from}
-            min={MIN_DATE}
-            max={MAX_DATE}
-            onChange={(e) => {
-              // A date input reports each half-typed year (0002, 0020, 0202…): wait for a real one.
-              const value = e.target.value
-              if (!isSupportedDate(value)) return
-              // Moving the start past the end keeps the number of weeks shown.
-              onRangeChange(value > to ? weeksFrom(value, weeks) : weekRange(value, to))
-            }}
-          />
-        </label>
-        <label>
-          To
-          <input
-            type="date"
-            value={to}
-            min={MIN_DATE}
-            max={MAX_DATE}
-            onChange={(e) => isSupportedDate(e.target.value) && onRangeChange(weekRange(from, e.target.value))}
-          />
-        </label>
+        <DateInput
+          label="From"
+          value={from}
+          // Moving the start past the end keeps the number of weeks shown.
+          onCommit={(date) => onRangeChange(date > to ? weeksFrom(date, weeks) : weekRange(date, to))}
+        />
+        <DateInput label="To" value={to} onCommit={(date) => onRangeChange(weekRange(from, date))} />
         <label>
           Show
           <select value={weeks} onChange={(e) => onRangeChange(weeksFrom(from, Number(e.target.value)))}>
-            {!WEEK_OPTIONS.includes(weeks) && <option value={weeks}>{weeks} weeks</option>}
+            {!WEEK_OPTIONS.includes(weeks) && (
+              <option value={weeks}>
+                {weeks} {weeks === 1 ? 'week' : 'weeks'}
+              </option>
+            )}
             {WEEK_OPTIONS.map((n) => (
               <option key={n} value={n}>
                 {n} weeks
@@ -190,6 +223,24 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
           </span>
           <button type="button" onClick={retry}>
             Retry
+          </button>
+        </div>
+      )}
+
+      {editing?.error && editing.failed && !editingRendered && (
+        <div className="banner" role="alert">
+          <span>
+            The weekly hours for {editingName ?? 'this person'} weren't saved as asked. {editing.error}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('')
+              setOnlyOver(false)
+              setScrollToId(editing.id)
+            }}
+          >
+            Show
           </button>
         </div>
       )}
@@ -251,13 +302,12 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                       type="button"
                       className="cap-button"
                       aria-label={`Weekly hours for ${row.name}: ${hours(row.weeklyHours)}. Edit`}
+                      data-person-id={row.id}
                       aria-expanded={editing?.id === row.id}
                       // While a save is in flight its editor must stay open, or a
                       // failure would have nowhere to be shown.
                       disabled={editing?.id === row.id || editing?.saving === true}
-                      onClick={() =>
-                        setEditing({ id: row.id, draft: String(row.weeklyHours), saving: false, error: null, failed: false })
-                      }
+                      onClick={() => openEditor(row.id, row.weeklyHours)}
                     >
                       {hours(row.weeklyHours)}
                     </button>
@@ -267,7 +317,8 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                         editing={editing}
                         onChange={(draft) => setEditing({ ...editing, draft, error: null, failed: false })}
                         onSubmit={submit}
-                        onCancel={() => setEditing(null)}
+                        onCancel={closeEditor}
+                        onFocused={() => setEditing((cur) => (cur ? { ...cur, focus: false } : cur))}
                       />
                     )}
                   </td>
@@ -319,9 +370,20 @@ function CapacityEditor(props: {
   onChange: (draft: string) => void
   onSubmit: () => void
   onCancel: () => void
+  onFocused: () => void
 }) {
-  const { name, editing, onChange, onSubmit, onCancel } = props
+  const { name, editing, onChange, onSubmit, onCancel, onFocused } = props
   const hintId = `cap-hint-${editing.id}`
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Not autoFocus: that would fire again every time a virtualised or filtered
+  // row remounts, pulling focus (and the scroll position) back to the editor.
+  useEffect(() => {
+    if (!editing.focus) return
+    inputRef.current?.focus()
+    onFocused()
+  }, [editing.focus, onFocused])
+
   return (
     <form
       className="cap-editor"
@@ -331,6 +393,10 @@ function CapacityEditor(props: {
       onSubmit={(e) => {
         e.preventDefault()
         onSubmit()
+      }}
+      // On the form, so Escape works from the buttons too, not just the input.
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onCancel()
       }}
     >
       <input
@@ -342,13 +408,10 @@ function CapacityEditor(props: {
         min={0}
         max={168}
         step="any"
+        ref={inputRef}
         value={editing.draft}
         readOnly={editing.saving}
-        autoFocus
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && !editing.saving) onCancel()
-        }}
       />
       <button type="submit" disabled={editing.saving}>
         {editing.saving ? 'Saving…' : editing.failed ? 'Retry' : 'Save'}
@@ -416,9 +479,12 @@ function Skeleton() {
   )
 }
 
-/** True once `key` has been loading for a while; resets when a new load starts. */
-function useSlow(key: string | null) {
-  const [slowKey, setSlowKey] = useState<string | null>(null)
+/**
+ * True once the load identified by `key` has been running for a while. Keyed by
+ * request, not by range: a retry or a return to the same range is a new load.
+ */
+function useSlow(key: number | null) {
+  const [slowKey, setSlowKey] = useState<number | null>(null)
   useEffect(() => {
     if (key === null) return
     const timer = setTimeout(() => setSlowKey(key), SLOW_AFTER_MS)
@@ -427,16 +493,62 @@ function useSlow(key: string | null) {
   return key !== null && slowKey === key
 }
 
-function saveErrorMessage(err: unknown): string {
+function describeSaveError(err: unknown): { message: string; unconfirmed: boolean } {
   const message = err instanceof Error ? err.message : String(err)
-  // Our API answered with an error: it did not store the value. (502–504 come
-  // from a proxy in front of it, which may have given up after the API stored it.)
-  const status = err instanceof ApiError ? err.status : undefined
-  if (status !== undefined && status >= 400 && ![502, 503, 504].includes(status)) return `Not saved. ${message}`
-  // No answer, or one we couldn't read: the server may have stored it before
-  // the connection dropped. The grid keeps showing the last confirmed value,
-  // and a retry is safe because a save sets an absolute value.
-  return `Couldn't confirm the save, so it may or may not have been stored. Retrying is safe. (${message})`
+  // Our API answered with its own error: the value was not stored.
+  if (err instanceof ApiError && err.fromApi) return { message: `Not saved. ${message}`, unconfirmed: false }
+  // No answer, a timeout, or a proxy's error page: the server may have stored it
+  // before the answer was lost. The grid keeps the last confirmed value, and a
+  // retry is safe because a save sets an absolute value.
+  return {
+    message: `Couldn't confirm the save, so it may or may not have been stored. Retrying is safe. (${message})`,
+    unconfirmed: true,
+  }
+}
+
+/**
+ * A date field that doesn't fight the person typing in it. The range snaps to
+ * Mondays, but writing the snapped date back while someone types would rewrite
+ * the segments under their cursor ("03/02/2026" ended up as 2024-12-02). So the
+ * field shows the draft while focused, and the draft is applied after a pause,
+ * on Enter or when the field loses focus. A date input also reports each
+ * half-typed year (0002, 0020, 0202…); only supported dates are applied.
+ */
+function DateInput({ label, value, onCommit }: { label: string; value: ISODate; onCommit: (date: ISODate) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  function commit(date: string) {
+    clearTimeout(timer.current)
+    if (isSupportedDate(date)) onCommit(date)
+  }
+
+  return (
+    <label>
+      {label}
+      <input
+        type="date"
+        value={draft ?? value}
+        min={MIN_DATE}
+        max={MAX_DATE}
+        onFocus={() => setDraft(value)}
+        onChange={(e) => {
+          const date = e.target.value
+          setDraft(date)
+          clearTimeout(timer.current)
+          timer.current = setTimeout(() => commit(date), COMMIT_DATE_AFTER_MS)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && draft !== null) commit(draft)
+        }}
+        onBlur={() => {
+          if (draft !== null && draft !== value) commit(draft)
+          setDraft(null)
+        }}
+      />
+    </label>
+  )
 }
 
 // Lower-case, without accents, so "soren ob" finds "Søren Öberg". Some letters

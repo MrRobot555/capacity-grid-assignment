@@ -41,10 +41,19 @@ async function geometry(page: Page) {
   })
 }
 
-test('virtualised rows: the right person at the bottom and mid-scroll, all rows the same height', async ({
+// At the default font the rows are exactly the 44px the code guesses, so the
+// guess alone would pass. 17px gives fractional row heights, which only a real
+// measurement handles.
+for (const fontSize of ['default', '17px']) {
+test(`virtualised rows (${fontSize} font): the right person at the bottom and mid-scroll, all rows the same height`, async ({
   page,
   request,
 }) => {
+  if (fontSize !== 'default') {
+    await page.addInitScript((size) => {
+      document.addEventListener('DOMContentLoaded', () => (document.documentElement.style.fontSize = size))
+    }, fontSize)
+  }
   const names = await namesInGridOrder(request)
   expect(names.length).toBe(500)
   await openRange(page, FIXTURE.from, FIXTURE.to, FIXTURE_WEEKS)
@@ -86,3 +95,4 @@ test('virtualised rows: the right person at the bottom and mid-scroll, all rows 
   const firstIdx = names.indexOf(mid.rows[0].name)
   expect(mid.rows.map((r) => r.name)).toEqual(names.slice(firstIdx, firstIdx + mid.rows.length))
 })
+}
