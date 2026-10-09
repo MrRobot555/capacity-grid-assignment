@@ -325,6 +325,9 @@ function CapacityEditor(props: {
   return (
     <form
       className="cap-editor"
+      // The app validates (parseWeeklyHours) and says why in the hint. Native
+      // validation would block the submit on max={168} and show its own popup.
+      noValidate
       onSubmit={(e) => {
         e.preventDefault()
         onSubmit()
