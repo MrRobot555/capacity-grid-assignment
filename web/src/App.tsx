@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CapacityGrid } from './CapacityGrid'
-import { isISODate, todayISO, weekRange, weeksFrom, type WeekRange } from './dates'
+import { isSupportedDate, limitWeeks, todayISO, weekRange, weeksFrom, type WeekRange } from './dates'
 
 const DEFAULT_WEEKS = 8
 
@@ -10,7 +10,7 @@ function rangeFromURL(): WeekRange {
   const params = new URLSearchParams(window.location.search)
   const from = params.get('from')
   const to = params.get('to')
-  if (isISODate(from) && isISODate(to)) return weekRange(from, to)
+  if (isSupportedDate(from) && isSupportedDate(to)) return limitWeeks(weekRange(from, to))
   return weeksFrom(todayISO(), DEFAULT_WEEKS)
 }
 
@@ -27,7 +27,7 @@ export function App() {
   return (
     <main>
       <h1>Team capacity</h1>
-      <CapacityGrid from={range.from} to={range.to} onRangeChange={setRange} />
+      <CapacityGrid from={range.from} to={range.to} onRangeChange={(next) => setRange(limitWeeks(next))} />
     </main>
   )
 }

@@ -3,6 +3,9 @@ import { allocationStatus, parseWeeklyHours, rangeKey, type Status } from './cap
 import {
   formatLong,
   formatShort,
+  isSupportedDate,
+  MAX_DATE,
+  MIN_DATE,
   mondayOf,
   shiftWeeks,
   todayISO,
@@ -27,8 +30,10 @@ const WEEK_OPTIONS = [4, 8, 13, 26, 52]
 const SLOW_AFTER_MS = 1500
 // Rows are virtualised: only the ones in view (plus OVERSCAN either side) are
 // rendered, so a roster of thousands over two years stays responsive. That
-// needs a fixed row height, which styles.css enforces.
-const ROW_HEIGHT = 44
+// needs every row to be the same height. styles.css fixes it at 44px, but zoom
+// or a larger default font can change it, and an error of 1px per row adds up
+// to a blank band at the bottom of 3000 rows, so the real height is measured.
+const ROW_HEIGHT_GUESS = 44
 const OVERSCAN = 8
 
 type Editing = {
@@ -49,9 +54,10 @@ type Editing = {
 export function CapacityGrid({ from, to, onRangeChange }: Props) {
   const { state, retry, saveWeeklyHours } = useCapacity(from, to)
   const [onlyOver, setOnlyOver] = useState(false)
+  const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Editing | null>(null)
   const slow = useSlow(state.loading ? state.requestedKey : null)
-  const { scrollerRef, first, last, onScroll } = useRowWindow()
+  const { scrollerRef, first, last, rowHeight, onScroll } = useRowWindow()
 
   const range = { from, to }
   const weeks = weekCount(from, to)
@@ -72,7 +78,8 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
     [data, rows],
   )
   const overCount = rows.filter((r) => r.isOver).length
-  const visible = onlyOver ? rows.filter((r) => r.isOver) : rows
+  const needle = searchable(query.trim())
+  const visible = rows.filter((r) => (!onlyOver || r.isOver) && (!needle || searchable(r.name).includes(needle)))
   const windowEnd = Math.min(visible.length, last)
   const windowStart = Math.min(first, windowEnd)
   const showingOtherRange = data !== null && data.key !== rangeKey(from, to)
@@ -118,7 +125,15 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
           <input
             type="date"
             value={from}
-            onChange={(e) => e.target.value && onRangeChange(weekRange(e.target.value, to))}
+            min={MIN_DATE}
+            max={MAX_DATE}
+            onChange={(e) => {
+              // A date input reports each half-typed year (0002, 0020, 0202…): wait for a real one.
+              const value = e.target.value
+              if (!isSupportedDate(value)) return
+              // Moving the start past the end keeps the number of weeks shown.
+              onRangeChange(value > to ? weeksFrom(value, weeks) : weekRange(value, to))
+            }}
           />
         </label>
         <label>
@@ -126,7 +141,9 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
           <input
             type="date"
             value={to}
-            onChange={(e) => e.target.value && onRangeChange(weekRange(from, e.target.value))}
+            min={MIN_DATE}
+            max={MAX_DATE}
+            onChange={(e) => isSupportedDate(e.target.value) && onRangeChange(weekRange(from, e.target.value))}
           />
         </label>
         <label>
@@ -143,6 +160,10 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
         <label className="check">
           <input type="checkbox" checked={onlyOver} onChange={(e) => setOnlyOver(e.target.checked)} />
           Only over capacity
+        </label>
+        <label>
+          Find person
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
         <span className="status" role="status">
           {state.loading && (slow ? 'Still loading — the server is taking a while…' : 'Loading…')}
@@ -205,11 +226,15 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
               {visible.length === 0 && (
                 <tr>
                   <td colSpan={data.weeks.length + 2} className="empty">
-                    {onlyOver ? 'Nobody is over capacity in these weeks.' : 'No people to show.'}
+                    {needle
+                      ? `Nobody matching “${query.trim()}”${onlyOver ? ' is over capacity in these weeks' : ''}.`
+                      : onlyOver
+                        ? 'Nobody is over capacity in these weeks.'
+                        : 'No people to show.'}
                   </td>
                 </tr>
               )}
-              <Spacer rows={windowStart} colSpan={data.weeks.length + 2} />
+              <Spacer height={windowStart * rowHeight} colSpan={data.weeks.length + 2} />
               {visible.slice(windowStart, windowEnd).map((row, i) => (
                 <tr
                   key={row.id}
@@ -226,7 +251,9 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                       className="cap-button"
                       aria-label={`Weekly hours for ${row.name}: ${hours(row.weeklyHours)}. Edit`}
                       aria-expanded={editing?.id === row.id}
-                      disabled={editing?.id === row.id}
+                      // While a save is in flight its editor must stay open, or a
+                      // failure would have nowhere to be shown.
+                      disabled={editing?.id === row.id || editing?.saving === true}
                       onClick={() =>
                         setEditing({ id: row.id, draft: String(row.weeklyHours), saving: false, error: null, failed: false })
                       }
@@ -255,7 +282,7 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                   ))}
                 </tr>
               ))}
-              <Spacer rows={visible.length - windowEnd} colSpan={data.weeks.length + 2} />
+              <Spacer height={(visible.length - windowEnd) * rowHeight} colSpan={data.weeks.length + 2} />
             </tbody>
           </table>
         </div>
@@ -333,11 +360,11 @@ function CapacityEditor(props: {
 }
 
 /** Stands in for rows outside the window, so the scrollbar stays honest. */
-function Spacer({ rows, colSpan }: { rows: number; colSpan: number }) {
-  if (rows <= 0) return null
+function Spacer({ height, colSpan }: { height: number; colSpan: number }) {
+  if (height <= 0) return null
   return (
     <tr aria-hidden="true" className="spacer">
-      <td colSpan={colSpan} style={{ height: rows * ROW_HEIGHT }} />
+      <td colSpan={colSpan} style={{ height }} />
     </tr>
   )
 }
@@ -347,6 +374,7 @@ function useRowWindow() {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [height, setHeight] = useState(800)
+  const [rowHeight, setRowHeight] = useState(ROW_HEIGHT_GUESS)
 
   useLayoutEffect(() => {
     const el = scrollerRef.current
@@ -356,10 +384,20 @@ function useRowWindow() {
     return () => observer.disconnect()
   })
 
+  // After every render: are real rows the height the spacers assume? Rows are
+  // styled to be identical; taking the tallest means that if they ever aren't,
+  // the value is stable instead of flipping with whichever row is first.
+  useLayoutEffect(() => {
+    const rows = scrollerRef.current?.querySelectorAll('tbody tr:not(.spacer)') ?? []
+    const measured = Math.max(0, ...Array.from(rows, (row) => row.getBoundingClientRect().height))
+    if (measured > 0 && Math.abs(measured - rowHeight) > 0.1) setRowHeight(measured)
+  })
+
   return {
     scrollerRef,
-    first: Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN),
-    last: Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN,
+    rowHeight,
+    first: Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN),
+    last: Math.ceil((scrollTop + height) / rowHeight) + OVERSCAN,
     onScroll: (e: UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop),
   }
 }
@@ -383,6 +421,18 @@ function useSlow(key: string | null) {
     return () => clearTimeout(timer)
   }, [key])
   return key !== null && slowKey === key
+}
+
+// Lower-case, without accents, so "soren ob" finds "Søren Öberg". Some letters
+// don't decompose into a base letter plus an accent, so they're mapped by hand.
+const LETTERS: Record<string, string> = { ø: 'o', æ: 'ae', œ: 'oe', ß: 'ss', đ: 'd', ł: 'l', þ: 'th', ð: 'd' }
+
+function searchable(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[øæœßđłþð]/g, (c) => LETTERS[c])
 }
 
 function formatHours(n: number): string {

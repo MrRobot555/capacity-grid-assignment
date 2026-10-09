@@ -238,9 +238,11 @@ td.cap:has(.cap-editor) {
 
 /* Allocation cells: a utilisation bar behind the number, red when over. */
 
-/* Fixed row height: the grid is virtualised (ROW_HEIGHT in CapacityGrid.tsx). */
+/* Uniform row height: the grid is virtualised (see ROW_HEIGHT_GUESS in CapacityGrid.tsx). */
+/* rem, so the height scales with the font instead of being outgrown by it. Every
+   cell is one line of text, so nothing can make one row taller than another. */
 tbody tr:not(.spacer) > * {
-  height: 44px;
+  height: 2.75rem;
   box-sizing: border-box;
   padding-block: 0;
   line-height: 1.15;
@@ -273,7 +275,7 @@ td.alloc.over {
 }
 
 .delta {
-  display: block;
+  margin-left: 0.3em;
   font-size: 0.7rem;
   font-weight: 600;
 }

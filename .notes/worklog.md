@@ -56,3 +56,12 @@ left unfinished. Append as you go; a line or two per entry is right.
 - `TestCapacityQueryPlanStaysCheap` gates the plan's causes: no JIT, and under 750 ms for the largest allowed range (~0.2 s today). Checked it can fail: with the slow filter put back it reports 2310 ms.
 - My own mistake, caught by the test: I computed "106 weeks from 2026-01-05" as ending 2028-01-02. It is 2028-01-16. The boundary test failed against a correct server.
 - Checked and left: year 0000 is accepted (pgx sends it as 1 BC, Postgres takes it). Harmless, so it isn't a 500.
+
+## Hunting (web)
+
+- Exhaustive date tests: every day 2024–2028 in 5 zones (incl. St John's −3:30 and Lord Howe's 30-minute DST) against a day sequence built in pure UTC. They passed first time, which is the evidence the date code is right rather than the absence of a test.
+- Found: `Date.UTC` reads years 0–99 as 19xx, and a date input emits years 0002/0020/0202 while you type "2026". Each keystroke fired a request for a nonsense range. Now `setUTCFullYear` is used, date inputs ignore years outside 2000–2099, and ranges from the URL or the pickers are capped at the API's 106 weeks.
+- Found: while one save was in flight, another person's editor could be opened. If the first save then failed, its error was dropped (the editor had moved on). Now other capacity buttons are disabled until the save settles.
+- Found in the browser at a 24px root font, not by unit tests: over-capacity cells wrapped to two lines, so rows were 44 or 47.9 px. Virtualisation assumed one height; my first fix (measure the first row) made the height flip as different rows came first, a render loop that unmounted the grid. Fixed at the cause: every cell is one line and the row height is in rem, so rows are uniform at any font size. The measurement takes the tallest row, so it can't oscillate. Checked at 16 and 24 px: 15 scroll positions, never a blank spacer under the viewport, last person reachable.
+- Added "Find person" (case- and accent-insensitive, incl. ø/æ/þ), because virtualised rows are invisible to the browser's find-in-page.
+- Moving From past To now keeps the number of weeks instead of collapsing to one.

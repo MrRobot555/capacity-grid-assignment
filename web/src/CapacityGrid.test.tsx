@@ -39,6 +39,7 @@ it('keeps the grid honest through a failed save and a successful retry', async (
   const firstWeekHeader = screen.getByRole('columnheader', { name: /5 Jan/ })
   expect(firstWeekHeader).toHaveTextContent('1 over')
   expect(within(dee).getByText('+5')).toBeInTheDocument()
+  expect(screen.getByText(/people over capacity/)).toHaveTextContent('1 of 2 people over capacity')
 
   fireEvent.click(within(dee).getByRole('button', { name: /Weekly hours for Dee Okafor/ }))
   fireEvent.change(screen.getByLabelText('Weekly hours for Dee Okafor'), { target: { value: '50' } })
@@ -56,6 +57,7 @@ it('keeps the grid honest through a failed save and a successful retry', async (
   await waitFor(() => expect(within(dee).getByRole('button', { name: /Weekly hours/ })).toHaveTextContent('50h'))
   expect(within(dee).queryByText('+5')).not.toBeInTheDocument()
   expect(firstWeekHeader).toHaveTextContent('none over')
+  expect(screen.getByText(/people over capacity/)).toHaveTextContent('0 of 2 people over capacity')
 
   // ...from the PATCH response, not by reloading the range.
   expect(fetchMock.mock.calls.filter(([, init]) => init?.method !== 'PATCH')).toHaveLength(1)
@@ -74,4 +76,54 @@ it('shows a reachable error and a retry when the range fails to load', async () 
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
   expect(await screen.findByText('Dee Okafor')).toBeInTheDocument()
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+// A failed save must never be silent. If another editor could open while one
+// save is in flight, that save's failure would have nowhere to be shown.
+it('does not let a second edit start while a save is in flight', async () => {
+  let failSave!: (r: Response) => void
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init?: RequestInit) =>
+      init?.method === 'PATCH'
+        ? new Promise<Response>((resolve) => (failSave = resolve))
+        : Promise.resolve(json(200, capacity)),
+    ),
+  )
+  render(<CapacityGrid from="2026-01-05" to="2026-01-18" onRangeChange={() => {}} />)
+
+  const dee = (await screen.findByText('Dee Okafor')).closest('tr')!
+  const ana = screen.getByText('Ana Ferreira').closest('tr')!
+  fireEvent.click(within(dee).getByRole('button', { name: /Weekly hours for Dee Okafor/ }))
+  fireEvent.change(screen.getByLabelText('Weekly hours for Dee Okafor'), { target: { value: '50' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await screen.findByRole('button', { name: 'Saving…' })
+
+  expect(within(ana).getByRole('button', { name: /Weekly hours for Ana Ferreira/ })).toBeDisabled()
+
+  failSave(json(500, { error: 'could not update person' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Not saved. could not update person')
+})
+
+// Rows are virtualised, so the browser's find-in-page can't reach most names.
+it('finds people by name, ignoring case and accents', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      json(200, {
+        ...capacity,
+        people: [...capacity.people, { id: 9, name: 'Søren Öberg', weeklyHours: 40, allocated: [0, 0] }],
+      }),
+    ),
+  )
+  render(<CapacityGrid from="2026-01-05" to="2026-01-18" onRangeChange={() => {}} />)
+  await screen.findByText('Søren Öberg')
+
+  fireEvent.change(screen.getByLabelText('Find person'), { target: { value: 'soren ob' } })
+  expect(screen.getByText('Søren Öberg')).toBeInTheDocument()
+  expect(screen.queryByText('Dee Okafor')).not.toBeInTheDocument()
+
+  fireEvent.change(screen.getByLabelText('Find person'), { target: { value: 'OKA' } })
+  expect(screen.getByText('Dee Okafor')).toBeInTheDocument()
+  expect(screen.queryByText('Søren Öberg')).not.toBeInTheDocument()
 })
