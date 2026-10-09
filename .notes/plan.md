@@ -2,6 +2,11 @@
 
 Decisions only. Code-level detail lives in the code and its tests.
 
+> **As built (deviations from this plan):**
+> - **No multi-range cache.** Only one range is held at a time, and the previous one stays on screen while the next loads. Not built: the cache, instant back-navigation, and "an edit fixes every cached range". The normalized people map and the pre-save-GET rule were kept.
+> - **No sort by over-allocation.** There is only the "Only over capacity" filter.
+> - **JIT is "tuned" by the query shape**, not by settings: the weeks are passed as a `date[]`. See the worklog.
+
 ## 1. What the data actually says (probed 2026-10-09; facts, not assumptions)
 
 | Fact | Evidence | Consequence |

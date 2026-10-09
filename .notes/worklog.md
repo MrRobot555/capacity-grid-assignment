@@ -36,3 +36,11 @@ left unfinished. Append as you go; a line or two per entry is right.
 - Verified in a real browser (headless Chromium, script in my scratchpad, not committed). Edited Dee to 50: her 45 stopped being red and the "5 Jan" header went from 15 over to 14, and the DB held 50. Then stopped the API container: the save showed "Not saved…" and the grid kept the confirmed values. Navigating showed the banner and kept the previous range. After starting the API, Retry recovered.
 - Changed after looking: the editor first covered the row's own cells, the ones you want to watch while deciding. It now opens below the row, and the capacity cell keeps showing the confirmed value while the draft lives in the editor. "Retry" appears only after a server failure, not after a validation message.
 - Caught: the TZ test used `process`, which the browser-only tsconfig doesn't type, so `npm run build` failed on the previous commit even though vitest passed. Fixed with a local declaration rather than adding Node types to the app.
+
+## Scale
+
+- Measured before virtualising (headless Chromium, 500 people): 1 year = 26k cells, 2.3 s to first grid, 1.3 s to untick the filter. 2 years = 52k cells, 4 s / 2.6 s. That is 6× worse at a few thousand people.
+- Rows are now windowed by hand (fixed 44 px rows, 8 rows overscan, spacer rows above and below). The DOM holds ~20–30 rows at any range, filter toggles take ~0.2 s, and switching to 52 weeks in-app takes ~330 ms, of which the request is ~70 ms. Columns are not windowed: 106 weeks wide is fine.
+- Editor state lives in the grid, not the row, so an edit survives its row scrolling out of the window.
+- Not built (deferred): range cache with instant back-navigation; sort by "most over"; server-side paging/filtering for rosters well beyond a few thousand; ETag; an index that bounds both sides of the overlap (GiST on `daterange(start_date, end_date, '[]')`), which the schema rule forbids here; browser history entries per range (`replaceState` only, so Back leaves the page).
+- `weekly_hours` has no effective date, so changing it rewrites history: last year's over-allocation changes too. The editor says so. A real fix is a capacity table with `valid_from`; then capacity becomes per-week in the API and a save must refetch the range instead of patching.

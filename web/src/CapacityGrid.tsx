@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type UIEvent } from 'react'
 import { allocationStatus, parseWeeklyHours, rangeKey, type Status } from './capacityState'
 import {
   formatLong,
@@ -25,6 +25,11 @@ type Props = {
 
 const WEEK_OPTIONS = [4, 8, 13, 26, 52]
 const SLOW_AFTER_MS = 1500
+// Rows are virtualised: only the ones in view (plus OVERSCAN either side) are
+// rendered, so a roster of thousands over two years stays responsive. That
+// needs a fixed row height, which styles.css enforces.
+const ROW_HEIGHT = 44
+const OVERSCAN = 8
 
 type Editing = {
   id: number
@@ -46,6 +51,7 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
   const [onlyOver, setOnlyOver] = useState(false)
   const [editing, setEditing] = useState<Editing | null>(null)
   const slow = useSlow(state.loading ? state.requestedKey : null)
+  const { scrollerRef, first, last, onScroll } = useRowWindow()
 
   const range = { from, to }
   const weeks = weekCount(from, to)
@@ -67,6 +73,8 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
   )
   const overCount = rows.filter((r) => r.isOver).length
   const visible = onlyOver ? rows.filter((r) => r.isOver) : rows
+  const windowEnd = Math.min(visible.length, last)
+  const windowStart = Math.min(first, windowEnd)
   const showingOtherRange = data !== null && data.key !== rangeKey(from, to)
 
   async function submit() {
@@ -167,8 +175,13 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
       {!data && state.loading && <Skeleton />}
 
       {data && (
-        <div className={`scroller${state.loading || showingOtherRange ? ' stale' : ''}`} aria-busy={state.loading}>
-          <table>
+        <div
+          ref={scrollerRef}
+          onScroll={onScroll}
+          className={`scroller${state.loading || showingOtherRange ? ' stale' : ''}`}
+          aria-busy={state.loading}
+        >
+          <table aria-rowcount={visible.length + 1}>
             <thead>
               <tr>
                 <th scope="col" className="name">
@@ -196,8 +209,13 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                   </td>
                 </tr>
               )}
-              {visible.map((row) => (
-                <tr key={row.id} className={row.isOver ? 'is-over' : undefined}>
+              <Spacer rows={windowStart} colSpan={data.weeks.length + 2} />
+              {visible.slice(windowStart, windowEnd).map((row, i) => (
+                <tr
+                  key={row.id}
+                  className={row.isOver ? 'is-over' : undefined}
+                  aria-rowindex={windowStart + i + 2}
+                >
                   <th scope="row" className="name">
                     {row.name}
                   </th>
@@ -237,6 +255,7 @@ export function CapacityGrid({ from, to, onRangeChange }: Props) {
                   ))}
                 </tr>
               ))}
+              <Spacer rows={visible.length - windowEnd} colSpan={data.weeks.length + 2} />
             </tbody>
           </table>
         </div>
@@ -311,6 +330,38 @@ function CapacityEditor(props: {
       </p>
     </form>
   )
+}
+
+/** Stands in for rows outside the window, so the scrollbar stays honest. */
+function Spacer({ rows, colSpan }: { rows: number; colSpan: number }) {
+  if (rows <= 0) return null
+  return (
+    <tr aria-hidden="true" className="spacer">
+      <td colSpan={colSpan} style={{ height: rows * ROW_HEIGHT }} />
+    </tr>
+  )
+}
+
+/** Which rows of the scroller are in view. */
+function useRowWindow() {
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [height, setHeight] = useState(800)
+
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => setHeight(el.clientHeight || 800))
+    observer.observe(el)
+    return () => observer.disconnect()
+  })
+
+  return {
+    scrollerRef,
+    first: Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN),
+    last: Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN,
+    onScroll: (e: UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop),
+  }
 }
 
 function Skeleton() {

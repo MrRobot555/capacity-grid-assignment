@@ -238,6 +238,19 @@ td.cap:has(.cap-editor) {
 
 /* Allocation cells: a utilisation bar behind the number, red when over. */
 
+/* Fixed row height: the grid is virtualised (ROW_HEIGHT in CapacityGrid.tsx). */
+tbody tr:not(.spacer) > * {
+  height: 44px;
+  box-sizing: border-box;
+  padding-block: 0;
+  line-height: 1.15;
+}
+
+tr.spacer td {
+  padding: 0;
+  border: none;
+}
+
 td.alloc {
   text-align: right;
   background:
