@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -24,7 +25,8 @@ type person struct {
 // It returns the person as stored, so the client can update its state from the
 // server's value instead of from what it sent.
 func (s *server) handleUpdatePerson(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
+	// people.id is an int4: anything larger can't exist and would fail in Postgres.
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
 	if err != nil || id <= 0 {
 		writeError(w, http.StatusBadRequest, "id must be a positive integer")
 		return
@@ -36,6 +38,11 @@ func (s *server) handleUpdatePerson(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, `body must be {"weeklyHours": number}`)
+		return
+	}
+	// Decode stops after the first value; anything after it is a malformed body.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, `body must be {"weeklyHours": number}`)
 		return
 	}

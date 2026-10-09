@@ -109,10 +109,29 @@ func TestCapacityRejectsBadRanges(t *testing.T) {
 		"from=nope&to=2026-01-05",
 		"from=2026-01-12&to=2026-01-05",
 		"from=2024-01-01&to=2026-12-31",
+		"from=2026-02-30&to=2026-03-01", // no such day
+		"from=%202026-01-05&to=2026-01-11",
+		"from=2026-01-05&to=2028-01-17", // 107 weeks
 	} {
 		if rec := do(t, s, "GET", "/api/capacity?"+q, ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: status %d, want 400", q, rec.Code)
 		}
+	}
+}
+
+func TestCapacityAllowsExactlyMaxWeeks(t *testing.T) {
+	s := testServer(t)
+	// 2026-01-05 → 2028-01-16 is 106 Monday-to-Sunday weeks (742 days).
+	rec := do(t, s, "GET", "/api/capacity?from=2026-01-05&to=2028-01-16", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var resp capacityResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Weeks) != maxWeeks {
+		t.Errorf("got %d weeks, want %d", len(resp.Weeks), maxWeeks)
 	}
 }
 
@@ -146,6 +165,12 @@ func TestUpdatePerson(t *testing.T) {
 		{"/api/people/3", `{"weeklyHours": 169}`, http.StatusBadRequest},
 		{"/api/people/3", `{"weeklyHours": 10, "name": "x"}`, http.StatusBadRequest},
 		{"/api/people/999999", `{"weeklyHours": 10}`, http.StatusNotFound},
+		{"/api/people/0", `{"weeklyHours": 10}`, http.StatusBadRequest},
+		{"/api/people/99999999999", `{"weeklyHours": 10}`, http.StatusBadRequest}, // beyond int4
+		{"/api/people/3", `{"weeklyHours": 10} trailing`, http.StatusBadRequest},
+		{"/api/people/3", `{"weeklyHours": 10}{"weeklyHours": 20}`, http.StatusBadRequest},
+		{"/api/people/3", `null`, http.StatusBadRequest},
+		{"/api/people/3", ``, http.StatusBadRequest},
 	} {
 		if rec := do(t, s, "PATCH", tc.url, tc.body); rec.Code != tc.status {
 			t.Errorf("%s %s: status %d, want %d", tc.url, tc.body, rec.Code, tc.status)

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -48,8 +51,12 @@ WITH weeks AS (
 allocated AS (
   SELECT a.person_id,
          w.week_start,
-         SUM(a.hours_per_day * (LEAST(a.end_date, w.week_start + 4)
-                                - GREATEST(a.start_date, w.week_start) + 1)) AS hours
+         -- GREATEST(0, …): the schema allows end_date < start_date, and such a
+         -- row has no working days. (Filtering it out with start_date <= end_date
+         -- instead made the planner guess a third of the rows and pick a
+         -- nested loop: 0.16 s → 1.3 s for two years.)
+         SUM(a.hours_per_day * GREATEST(0, LEAST(a.end_date, w.week_start + 4)
+                                           - GREATEST(a.start_date, w.week_start) + 1)) AS hours
   FROM assignments a
   JOIN weeks w
     ON a.start_date <= w.week_start + 4
@@ -96,31 +103,41 @@ func (s *server) handleCapacity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.Query(r.Context(), capacityQuery, weeks)
+	people, err := loadCapacity(r.Context(), s.db, weeks)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load capacity")
 		return
 	}
-	defer rows.Close()
 
-	resp := capacityResponse{Weeks: make([]string, len(weeks)), People: []personCapacity{}}
+	resp := capacityResponse{Weeks: make([]string, len(weeks)), People: people}
 	for i, wk := range weeks {
 		resp.Weeks[i] = wk.Format(dateLayout)
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// querier is satisfied by both the pool and a transaction, so tests can run
+// the query against synthetic rows and roll them back.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func loadCapacity(ctx context.Context, db querier, weeks []time.Time) ([]personCapacity, error) {
+	rows, err := db.Query(ctx, capacityQuery, weeks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	people := []personCapacity{}
 	for rows.Next() {
 		var p personCapacity
 		if err := rows.Scan(&p.ID, &p.Name, &p.WeeklyHours, &p.Allocated); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not load capacity")
-			return
+			return nil, err
 		}
-		resp.People = append(resp.People, p)
+		people = append(people, p)
 	}
-	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load capacity")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	return people, rows.Err()
 }
 
 // weekStarts returns the Monday of every week that overlaps from..to.

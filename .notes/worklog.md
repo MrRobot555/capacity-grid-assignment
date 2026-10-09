@@ -44,3 +44,15 @@ left unfinished. Append as you go; a line or two per entry is right.
 - Editor state lives in the grid, not the row, so an edit survives its row scrolling out of the window.
 - Not built (deferred): range cache with instant back-navigation; sort by "most over"; server-side paging/filtering for rosters well beyond a few thousand; ETag; an index that bounds both sides of the overlap (GiST on `daterange(start_date, end_date, '[]')`), which the schema rule forbids here; browser history entries per range (`replaceState` only, so Back leaves the page).
 - `weekly_hours` has no effective date, so changing it rewrites history: last year's over-allocation changes too. The editor says so. A real fix is a capacity table with `valid_from`; then capacity becomes per-week in the API and a save must refetch the range instead of patching.
+
+## Hunting for what the fixture tests can't see (API)
+
+- New method: a day-by-day oracle (`api/oracle_test.go`) expands every assignment into days, drops weekends and buckets with Postgres `date_trunc('week')`. It shares no logic with the query. It agrees on all 500 people × 84 weeks of seeded data plus odd ranges, which is the independent confirmation that the weekday/overlap arithmetic is right everywhere, not just for the 5 fixture people.
+- New method: synthetic assignments in a rolled-back transaction, for shapes the seed lacks: weekend-only, Wed→Tue over 3 weeks, across the new year, longer than the range, end before start.
+- Found by them, each proven by a failing test first:
+  - An assignment with `end_date < start_date` subtracted hours (−18.5h in a week). The seed has none, but the schema allows it and reviewers rebuild with their own copy of the seed. Fixed with `GREATEST(0, …)` on the day count.
+  - Fixing that as a `WHERE start_date <= end_date` filter instead made the 2-year query 8× slower (0.16 → 1.3 s): Postgres guesses a third of the rows for column-vs-column comparisons and picked a 13M-comparison nested loop. Caught only because I re-timed after the fix.
+  - `PATCH /api/people/99999999999` was a 500 (int4 overflow in Postgres) → now 400. A body with trailing data (`{"weeklyHours":10} x`, or two objects) was accepted and saved → now 400.
+- `TestCapacityQueryPlanStaysCheap` gates the plan's causes: no JIT, and under 750 ms for the largest allowed range (~0.2 s today). Checked it can fail: with the slow filter put back it reports 2310 ms.
+- My own mistake, caught by the test: I computed "106 weeks from 2026-01-05" as ending 2028-01-02. It is 2028-01-16. The boundary test failed against a correct server.
+- Checked and left: year 0000 is accepted (pgx sends it as 1 BC, Postgres takes it). Harmless, so it isn't a 500.
